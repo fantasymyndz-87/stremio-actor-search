@@ -44,7 +44,12 @@ const builder = new addonBuilder({
       name: 'Filmography',
       extra: [{ name: 'search', isRequired: true }]
     }
-  ]
+  ],
+  // Verification for stremio-addons.net
+  stremioAddonsConfig: {
+    issuer: "https://stremio-addons.net",
+    signature: "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..pmpQDD2aOIHOmCkvXxhDjw.6E4pDsuyAnb1bZD3EFrMRgOBfCNOHIGbUJOK_jghQ4e_frTlqfel6UzZe1TbaBc3gR3UGNZpxsMlafq03ew0fCAneSvZVAY9ZuYtM8pvhEjJgfKARo44fHICUfqUBLwW.CIA81bj5N0UmbrKOtXh0Yg"
+  }
 });
 
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
@@ -56,7 +61,6 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
   if (query.length < 2) return { metas: [] };
 
   try {
-    // Search person
     const search = await tmdb(
       `/search/person?query=${encodeURIComponent(query)}&include_adult=false&language=en-US&page=1`
     );
@@ -116,7 +120,6 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
       });
     }
 
-    // Sort by popularity and limit
     const metas = results
       .sort((a, b) => b.popularity - a.popularity)
       .slice(0, 40)
