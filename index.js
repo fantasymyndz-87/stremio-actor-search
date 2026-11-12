@@ -60,4 +60,139 @@ const builder = new addonBuilder({
   ],
   stremioAddonsConfig: {
     issuer: 'https://stremio-addons.net',
-    signature: 'eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..pmpQDD2aOIHOmCkvXxhDjw.6E4pDsuyAnb1bZD3EFrMRgOBfCNOHIGbUJOK_jghQ4e_frTlqfel
+    signature: 'eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..pmpQDD2aOIHOmCkvXxhDjw.6E4pDsuyAnb1bZD3EFrMRgOBfCNOHIGbUJOK_jghQ4e_frTlqfel6UzZe1TbaBc3gR3UGNZpxsMlafq03ew0fCAneSvZVAY9ZuYtM8pvhEjJgfKARo44fHICUfqUBLwW.CIA81bj5N0UmbrKOtXh0Yg'
+  }
+});
+
+// ---------- Catalog (Movie Filmography with IMDb IDs) ----------
+builder.defineCatalogHandler(async ({ type, id, extra }) => {
+  if (id !== 'actor-search' || !extra?.search) {
+    return { metas: [] };
+  }
+
+  const query = extra.search.trim();
+  if (query.length < 2) return { metas: [] };
+
+  try {
+    const search = await tmdb(
+      `/search/person?query=${encodeURIComponent(query)}&include_adult=false&language=en-US&page=1`
+    );
+
+    if (!search.results?.length) return { metas: [] };
+
+    const person = search.results[0];
+    const credits = await tmdb(`/person/${person.id}/combined_credits?language=en-US`);
+
+    const candidates = [];
+
+    // Acting credits (movies only)
+    for (const item of credits.cast || []) {
+      if (item.media_type !== 'movie') continue;
+      if (!item.poster_path) continue;
+
+      const year = item.release_date?.slice(0, 4) || '';
+
+      candidates.push({
+        tmdbId: item.id,
+        title: item.title,
+        year,
+        poster: `${POSTER_BASE}${item.poster_path}`,
+        description: item.character ? `Actor as ${item.character}` : 'Actor',
+        popularity: item.popularity || 0
+      });
+    }
+
+    // Directing credits (movies only)
+    for (const item of credits.crew || []) {
+      if (item.job !== 'Director') continue;
+      if (item.media_type !== 'movie') continue;
+      if (!item.poster_path) continue;
+
+      const already = candidates.some(c => c.tmdbId === item.id);
+      if (already) continue;
+
+      const year = item.release_date?.slice(0, 4) || '';
+
+      candidates.push({
+        tmdbId: item.id,
+        title: item.title,
+        year,
+        poster: `${POSTER_BASE}${item.poster_path}`,
+        description: 'Director',
+        popularity: item.popularity || 0
+      });
+    }
+
+    // Sort + limit before resolving IMDb IDs
+    const limited = candidates
+      .sort((a, b) => b.popularity - a.popularity)
+      .slice(0, 25);
+
+    // Resolve IMDb IDs (limited concurrency)
+    const metas = await mapLimit(limited, 5, async (item) => {
+      let finalId = `tmdb:movie:${item.tmdbId}`;
+
+      try {
+        const ext = await tmdb(`/movie/${item.tmdbId}/external_ids`);
+        if (ext.imdb_id) {
+          finalId = ext.imdb_id;
+        }
+      } catch (e) {
+        // keep tmdb fallback
+      }
+
+      return {
+        id: finalId,
+        type: 'movie',
+        name: item.title,
+        poster: item.poster,
+        posterShape: 'poster',
+        releaseInfo: item.year,
+        description: item.description
+      };
+    });
+
+    return { metas };
+  } catch (err) {
+    console.error('Catalog error:', err.message);
+    return { metas: [] };
+  }
+});
+
+// ---------- Meta (Detail Page) ----------
+builder.defineMetaHandler(async ({ type, id }) => {
+  if (!id) return { meta: null };
+
+  try {
+    let tmdbId;
+
+    if (id.startsWith('tt')) {
+      const found = await tmdb(`/find/${id}?external_source=imdb_id`);
+      const movie = found.movie_results?.[0];
+      if (!movie) return { meta: null };
+      tmdbId = movie.id;
+    } else if (id.startsWith('tmdb:movie:')) {
+      tmdbId = id.split(':')[2];
+    } else {
+      return { meta: null };
+    }
+
+    const data = await tmdb(
+      `/movie/${tmdbId}?language=en-US&append_to_response=credits,external_ids`
+    );
+
+    const year = data.release_date?.slice(0, 4) || '';
+    const cast = (data.credits?.cast || [])
+      .slice(0, 12)
+      .map(c => c.name)
+      .filter(Boolean);
+
+    const director = (data.credits?.crew || [])
+      .filter(c => c.job === 'Director')
+      .map(c => c.name)
+      .slice(0, 3)
+      .join(', ');
+
+    const genres = (data.genres || []).map(g => g.name);
+    const imdbId = data.external_ids?.imdb_id;
+    const metaId = imdbId
