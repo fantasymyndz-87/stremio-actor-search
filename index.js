@@ -24,12 +24,11 @@ async function tmdb(path) {
   return res.json();
 }
 
-// Build the addon
 const builder = new addonBuilder({
   id: 'com.adamrich.actor-search',
-  version: '1.0.0',
+  version: '1.1.0',
   name: 'Actor Search',
-  description: 'Search for an actor and see their movies & TV shows',
+  description: 'Search actors and directors to browse their movies & TV shows',
   logo: 'https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_2-d537fb228cf3ded904ef09b136fe3fec72548ebc1fea3fbbd1ad9e36364db38b.svg',
   resources: ['catalog'],
   types: ['movie', 'series'],
@@ -38,17 +37,13 @@ const builder = new addonBuilder({
       type: 'movie',
       id: 'actor-search',
       name: 'Actor Search',
-      extra: [
-        { name: 'search', isRequired: true }
-      ]
+      extra: [{ name: 'search', isRequired: true }]
     },
     {
       type: 'series',
       id: 'actor-search',
       name: 'Actor Search',
-      extra: [
-        { name: 'search', isRequired: true }
-      ]
+      extra: [{ name: 'search', isRequired: true }]
     }
   ]
 });
@@ -73,45 +68,76 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
       return { metas: [] };
     }
 
-    // Take the most popular / best match
     const person = search.results[0];
     const personId = person.id;
 
     // 2. Get combined credits
     const credits = await tmdb(`/person/${personId}/combined_credits?language=en-US`);
 
-    const cast = credits.cast || [];
+    const results = [];
 
-    // Filter by requested type and clean up
-    const filtered = cast
-      .filter(item => {
-        if (type === 'movie') return item.media_type === 'movie';
-        if (type === 'series') return item.media_type === 'tv';
-        return false;
-      })
-      // Prefer items that have a poster and some popularity
-      .filter(item => item.poster_path)
-      .sort((a, b) => (b.popularity || 0) - (a.popularity || 0))
-      .slice(0, 40); // keep results reasonable
+    // --- Acting credits (cast) ---
+    const cast = (credits.cast || []).filter(item => {
+      if (type === 'movie') return item.media_type === 'movie';
+      if (type === 'series') return item.media_type === 'tv';
+      return false;
+    });
 
-    // 3. Map to Stremio meta previews
-    // We use tmdb: IDs for now (works well + avoids extra API calls for IMDb IDs)
-    const metas = filtered.map(item => {
+    for (const item of cast) {
+      if (!item.poster_path) continue;
+
       const isMovie = item.media_type === 'movie';
       const title = isMovie ? item.title : item.name;
       const year = (isMovie ? item.release_date : item.first_air_date)?.slice(0, 4) || '';
 
-      return {
+      results.push({
         id: `tmdb:${item.media_type}:${item.id}`,
         type: isMovie ? 'movie' : 'series',
         name: title,
-        poster: item.poster_path ? `${POSTER_BASE}${item.poster_path}` : null,
+        poster: `${POSTER_BASE}${item.poster_path}`,
         posterShape: 'poster',
         releaseInfo: year,
-        // helpful for the user
-        description: item.character ? `as ${item.character}` : undefined
-      };
+        description: item.character ? `Actor • as ${item.character}` : 'Actor',
+        popularity: item.popularity || 0
+      });
+    }
+
+    // --- Directing credits (crew) ---
+    const crew = (credits.crew || []).filter(item => {
+      if (item.job !== 'Director') return false;
+      if (type === 'movie') return item.media_type === 'movie';
+      if (type === 'series') return item.media_type === 'tv';
+      return false;
     });
+
+    for (const item of crew) {
+      if (!item.poster_path) continue;
+
+      const isMovie = item.media_type === 'movie';
+      const title = isMovie ? item.title : item.name;
+      const year = (isMovie ? item.release_date : item.first_air_date)?.slice(0, 4) || '';
+
+      // Avoid duplicates if the person both acted and directed the same title
+      const alreadyExists = results.some(r => r.id === `tmdb:${item.media_type}:${item.id}`);
+      if (alreadyExists) continue;
+
+      results.push({
+        id: `tmdb:${item.media_type}:${item.id}`,
+        type: isMovie ? 'movie' : 'series',
+        name: title,
+        poster: `${POSTER_BASE}${item.poster_path}`,
+        posterShape: 'poster',
+        releaseInfo: year,
+        description: 'Director',
+        popularity: item.popularity || 0
+      });
+    }
+
+    // Sort by popularity (highest first) and limit
+    const metas = results
+      .sort((a, b) => b.popularity - a.popularity)
+      .slice(0, 50)
+      .map(({ popularity, ...meta }) => meta); // remove temporary popularity field
 
     return { metas };
   } catch (err) {
@@ -121,10 +147,7 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
 });
 
 const addonInterface = builder.getInterface();
-
-// Start server
 const PORT = process.env.PORT || 7000;
 serveHTTP(addonInterface, { port: PORT });
 
 console.log(`Actor Search addon running on port ${PORT}`);
-console.log(`Manifest: http://localhost:${PORT}/manifest.json`);
