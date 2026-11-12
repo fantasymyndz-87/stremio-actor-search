@@ -11,7 +11,6 @@ if (!TMDB_TOKEN) {
 
 const headers = {
   Authorization: `Bearer ${TMDB_TOKEN}`,
-  'Content-Type': 'application/json',
   Accept: 'application/json'
 };
 
@@ -26,9 +25,9 @@ async function tmdb(path) {
 
 const builder = new addonBuilder({
   id: 'com.adamrich.actor-search',
-  version: '1.1.0',
+  version: '1.2.0',
   name: 'Actor Search',
-  description: 'Search actors and directors to browse their movies & TV shows',
+  description: 'Search actors and directors to browse their filmography',
   logo: 'https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_2-d537fb228cf3ded904ef09b136fe3fec72548ebc1fea3fbbd1ad9e36364db38b.svg',
   resources: ['catalog'],
   types: ['movie', 'series'],
@@ -36,13 +35,13 @@ const builder = new addonBuilder({
     {
       type: 'movie',
       id: 'actor-search',
-      name: 'Actor Search',
+      name: 'Filmography',
       extra: [{ name: 'search', isRequired: true }]
     },
     {
       type: 'series',
       id: 'actor-search',
-      name: 'Actor Search',
+      name: 'Filmography',
       extra: [{ name: 'search', isRequired: true }]
     }
   ]
@@ -54,36 +53,25 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
   }
 
   const query = extra.search.trim();
-  if (!query || query.length < 2) {
-    return { metas: [] };
-  }
+  if (query.length < 2) return { metas: [] };
 
   try {
-    // 1. Search for the person
+    // Search person
     const search = await tmdb(
       `/search/person?query=${encodeURIComponent(query)}&include_adult=false&language=en-US&page=1`
     );
 
-    if (!search.results?.length) {
-      return { metas: [] };
-    }
+    if (!search.results?.length) return { metas: [] };
 
     const person = search.results[0];
-    const personId = person.id;
-
-    // 2. Get combined credits
-    const credits = await tmdb(`/person/${personId}/combined_credits?language=en-US`);
+    const credits = await tmdb(`/person/${person.id}/combined_credits?language=en-US`);
 
     const results = [];
 
-    // --- Acting credits (cast) ---
-    const cast = (credits.cast || []).filter(item => {
-      if (type === 'movie') return item.media_type === 'movie';
-      if (type === 'series') return item.media_type === 'tv';
-      return false;
-    });
-
-    for (const item of cast) {
+    // Acting credits
+    for (const item of credits.cast || []) {
+      if (type === 'movie' && item.media_type !== 'movie') continue;
+      if (type === 'series' && item.media_type !== 'tv') continue;
       if (!item.poster_path) continue;
 
       const isMovie = item.media_type === 'movie';
@@ -97,29 +85,24 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
         poster: `${POSTER_BASE}${item.poster_path}`,
         posterShape: 'poster',
         releaseInfo: year,
-        description: item.character ? `Actor • as ${item.character}` : 'Actor',
+        description: item.character ? `Actor as ${item.character}` : 'Actor',
         popularity: item.popularity || 0
       });
     }
 
-    // --- Directing credits (crew) ---
-    const crew = (credits.crew || []).filter(item => {
-      if (item.job !== 'Director') return false;
-      if (type === 'movie') return item.media_type === 'movie';
-      if (type === 'series') return item.media_type === 'tv';
-      return false;
-    });
-
-    for (const item of crew) {
+    // Directing credits
+    for (const item of credits.crew || []) {
+      if (item.job !== 'Director') continue;
+      if (type === 'movie' && item.media_type !== 'movie') continue;
+      if (type === 'series' && item.media_type !== 'tv') continue;
       if (!item.poster_path) continue;
+
+      const alreadyAdded = results.some(r => r.id === `tmdb:${item.media_type}:${item.id}`);
+      if (alreadyAdded) continue;
 
       const isMovie = item.media_type === 'movie';
       const title = isMovie ? item.title : item.name;
       const year = (isMovie ? item.release_date : item.first_air_date)?.slice(0, 4) || '';
-
-      // Avoid duplicates if the person both acted and directed the same title
-      const alreadyExists = results.some(r => r.id === `tmdb:${item.media_type}:${item.id}`);
-      if (alreadyExists) continue;
 
       results.push({
         id: `tmdb:${item.media_type}:${item.id}`,
@@ -133,11 +116,11 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
       });
     }
 
-    // Sort by popularity (highest first) and limit
+    // Sort by popularity and limit
     const metas = results
       .sort((a, b) => b.popularity - a.popularity)
-      .slice(0, 50)
-      .map(({ popularity, ...meta }) => meta); // remove temporary popularity field
+      .slice(0, 40)
+      .map(({ popularity, ...meta }) => meta);
 
     return { metas };
   } catch (err) {
