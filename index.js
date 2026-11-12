@@ -25,12 +25,13 @@ async function tmdb(path) {
 
 const builder = new addonBuilder({
   id: 'com.adamrich.actor-search',
-  version: '1.2.0',
+  version: '1.3.0',
   name: 'Actor Search',
   description: 'Search actors and directors to browse their filmography',
   logo: 'https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_2-d537fb228cf3ded904ef09b136fe3fec72548ebc1fea3fbbd1ad9e36364db38b.svg',
-  resources: ['catalog'],
+  resources: ['catalog', 'stream'],
   types: ['movie', 'series'],
+  idPrefixes: ['tmdb'],
   catalogs: [
     {
       type: 'movie',
@@ -45,13 +46,13 @@ const builder = new addonBuilder({
       extra: [{ name: 'search', isRequired: true }]
     }
   ],
-  // Verification for stremio-addons.net
   stremioAddonsConfig: {
     issuer: "https://stremio-addons.net",
     signature: "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..pmpQDD2aOIHOmCkvXxhDjw.6E4pDsuyAnb1bZD3EFrMRgOBfCNOHIGbUJOK_jghQ4e_frTlqfel6UzZe1TbaBc3gR3UGNZpxsMlafq03ew0fCAneSvZVAY9ZuYtM8pvhEjJgfKARo44fHICUfqUBLwW.CIA81bj5N0UmbrKOtXh0Yg"
   }
 });
 
+// ---------- Catalog (Filmography) ----------
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
   if (id !== 'actor-search' || !extra?.search) {
     return { metas: [] };
@@ -129,6 +130,60 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
   } catch (err) {
     console.error('Catalog error:', err.message);
     return { metas: [] };
+  }
+});
+
+// ---------- Stream (Trailers) ----------
+builder.defineStreamHandler(async ({ type, id }) => {
+  // Expected id format: tmdb:movie:123 or tmdb:tv:456
+  if (!id.startsWith('tmdb:')) {
+    return { streams: [] };
+  }
+
+  const parts = id.split(':');
+  if (parts.length !== 3) return { streams: [] };
+
+  const mediaType = parts[1]; // "movie" or "tv"
+  const tmdbId = parts[2];
+
+  if (!['movie', 'tv'].includes(mediaType) || !tmdbId) {
+    return { streams: [] };
+  }
+
+  try {
+    const data = await tmdb(`/${mediaType}/${tmdbId}/videos?language=en-US`);
+    const videos = data.results || [];
+
+    // Prefer official trailers, then any trailer/teaser from YouTube
+    const youtubeVideos = videos
+      .filter(v => v.site === 'YouTube' && v.key)
+      .filter(v => ['Trailer', 'Teaser', 'Clip'].includes(v.type));
+
+    // Sort: official trailers first, then regular trailers, then teasers
+    youtubeVideos.sort((a, b) => {
+      const score = (v) => {
+        let s = 0;
+        if (v.official) s += 10;
+        if (v.type === 'Trailer') s += 5;
+        if (v.type === 'Teaser') s += 2;
+        return s;
+      };
+      return score(b) - score(a);
+    });
+
+    const streams = youtubeVideos.slice(0, 5).map(v => ({
+      name: v.official ? 'Official Trailer' : (v.type || 'Trailer'),
+      title: v.name || 'Trailer',
+      ytId: v.key,
+      behaviorHints: {
+        bingeGroup: `trailer-${id}`
+      }
+    }));
+
+    return { streams };
+  } catch (err) {
+    console.error('Stream error:', err.message);
+    return { streams: [] };
   }
 });
 
