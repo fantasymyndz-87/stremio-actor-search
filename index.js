@@ -195,4 +195,80 @@ builder.defineMetaHandler(async ({ type, id }) => {
 
     const genres = (data.genres || []).map(g => g.name);
     const imdbId = data.external_ids?.imdb_id;
-    const metaId = imdbId
+    const metaId = imdbId || `tmdb:movie:${tmdbId}`;
+
+    const meta = {
+      id: metaId,
+      type: 'movie',
+      name: data.title,
+      description: data.overview || '',
+      poster: data.poster_path ? `${POSTER_BASE}${data.poster_path}` : null,
+      background: data.backdrop_path ? `${BACKDROP_BASE}${data.backdrop_path}` : null,
+      releaseInfo: year,
+      imdbRating: data.vote_average ? Number(data.vote_average.toFixed(1)) : null,
+      runtime: data.runtime ? `${data.runtime} min` : null,
+      genres,
+      cast,
+      director: director || undefined,
+      imdb_id: imdbId || undefined,
+      language: data.original_language || undefined,
+      country: (data.production_countries || []).map(c => c.name).join(', ') || undefined
+    };
+
+    return { meta };
+  } catch (err) {
+    console.error('Meta error:', err.message);
+    return { meta: null };
+  }
+});
+
+// ---------- Stream (Trailers) ----------
+builder.defineStreamHandler(async ({ type, id }) => {
+  if (!id) return { streams: [] };
+
+  try {
+    let tmdbId;
+
+    if (id.startsWith('tt')) {
+      const found = await tmdb(`/find/${id}?external_source=imdb_id`);
+      const movie = found.movie_results?.[0];
+      if (!movie) return { streams: [] };
+      tmdbId = movie.id;
+    } else if (id.startsWith('tmdb:movie:')) {
+      tmdbId = id.split(':')[2];
+    } else {
+      return { streams: [] };
+    }
+
+    const data = await tmdb(`/movie/${tmdbId}/videos?language=en-US`);
+    const videos = (data.results || [])
+      .filter(v => v.site === 'YouTube' && v.key)
+      .filter(v => ['Trailer', 'Teaser'].includes(v.type));
+
+    videos.sort((a, b) => {
+      const score = (v) => (v.official ? 10 : 0) + (v.type === 'Trailer' ? 5 : 0);
+      return score(b) - score(a);
+    });
+
+    const streams = videos.slice(0, 4).map(v => ({
+      name: '🎬 Trailer',
+      title: v.name || (v.official ? 'Official Trailer' : 'Trailer'),
+      ytId: v.key,
+      externalUrl: `https://www.youtube.com/watch?v=${v.key}`,
+      behaviorHints: {
+        bingeGroup: `trailer-${id}`
+      }
+    }));
+
+    return { streams };
+  } catch (err) {
+    console.error('Stream error:', err.message);
+    return { streams: [] };
+  }
+});
+
+const addonInterface = builder.getInterface();
+const PORT = process.env.PORT || 7000;
+serveHTTP(addonInterface, { port: PORT });
+
+console.log(`Actor Search addon v1.6.0 (movies only) running on port ${PORT}`);
