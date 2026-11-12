@@ -43,9 +43,9 @@ async function mapLimit(items, limit, fn) {
 
 const builder = new addonBuilder({
   id: 'com.adamrich.actor-search',
-  version: '1.6.0',
-  name: 'Actor Search',
-  description: 'Search actors and directors to browse their movie filmography',
+  version: '1.7.0',
+  name: 'Actor Search (Full Filmography)',
+  description: 'Search actors and directors to browse their complete movie filmography',
   logo: 'https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_2-d537fb228cf3ded904ef09b136fe3fec72548ebc1fea3fbbd1ad9e36364db38b.svg',
   resources: ['catalog', 'meta', 'stream'],
   types: ['movie'],
@@ -54,7 +54,7 @@ const builder = new addonBuilder({
     {
       type: 'movie',
       id: 'actor-search',
-      name: 'Filmography',
+      name: 'Full Filmography',
       extra: [{ name: 'search', isRequired: true }]
     }
   ],
@@ -64,7 +64,7 @@ const builder = new addonBuilder({
   }
 });
 
-// ---------- Catalog (Movie Filmography with IMDb IDs) ----------
+// ---------- Catalog (Full Movie Filmography with IMDb IDs) ----------
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
   if (id !== 'actor-search' || !extra?.search) {
     return { metas: [] };
@@ -85,7 +85,7 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
 
     const candidates = [];
 
-    // Acting credits (movies only)
+    // Acting credits (movies only) - keeping all valid entries
     for (const item of credits.cast || []) {
       if (item.media_type !== 'movie') continue;
       if (!item.poster_path) continue;
@@ -98,7 +98,7 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
         year,
         poster: `${POSTER_BASE}${item.poster_path}`,
         description: item.character ? `Actor as ${item.character}` : 'Actor',
-        popularity: item.popularity || 0
+        releaseDate: item.release_date || '0000-00-00'
       });
     }
 
@@ -119,17 +119,15 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
         year,
         poster: `${POSTER_BASE}${item.poster_path}`,
         description: 'Director',
-        popularity: item.popularity || 0
+        releaseDate: item.release_date || '0000-00-00'
       });
     }
 
-    // Sort + limit before resolving IMDb IDs
-    const limited = candidates
-      .sort((a, b) => b.popularity - a.popularity)
-      .slice(0, 25);
+    // Sort by release date descending (newest first) instead of popularity truncation
+    candidates.sort((a, b) => b.releaseDate.localeCompare(a.releaseDate));
 
-    // Resolve IMDb IDs (limited concurrency)
-    const metas = await mapLimit(limited, 5, async (item) => {
+    // Resolve IMDb IDs for the entire list with controlled concurrency (e.g., batch limit of 10)
+    const metas = await mapLimit(candidates, 10, async (item) => {
       let finalId = `tmdb:movie:${item.tmdbId}`;
 
       try {
@@ -271,4 +269,4 @@ const addonInterface = builder.getInterface();
 const PORT = process.env.PORT || 7000;
 serveHTTP(addonInterface, { port: PORT });
 
-console.log(`Actor Search addon v1.6.0 (movies only) running on port ${PORT}`);
+console.log(`Actor Search addon v1.7.0 (full filmography) running on port ${PORT}`);
